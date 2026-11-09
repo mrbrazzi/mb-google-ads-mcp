@@ -75,11 +75,31 @@ cannot establish that the upstream organization permits package publication.
 
 - Local isolated Podman image build: passed with the existing Dockerfile.
 - Network-isolated MCP initialization and tools listing: passed, version 0.0.6.
-- Publication policy tests cover immutable versions, retries, latest/backfills,
-  metadata mismatch, and registry errors.
-- Workflow lint, security checks, formatting, and fork rehearsal results must be
-  recorded after validation. Do not claim production publication until an
-  upstream maintainer has completed a real release and verified public access.
+- Thirteen publication tests pass, covering immutable versions, retries,
+  latest/backfills, metadata mismatch, registry errors, OCI indexes, and config
+  identity in both classic and containerd image archives.
+- `actionlint` (including ShellCheck), Black formatting, and offline `zizmor`
+  checks pass. Zizmor reports no findings with its default suppressions.
+- [Fork rehearsal on implementation commit 669868b](https://github.com/mrbrazzi/mb-google-ads-mcp/actions/runs/42722978995)
+  passed package validation, image validation, and GHCR publication. TestPyPI,
+  production PyPI/GHCR, and GitHub Release jobs were skipped. The fork has zero
+  configured environments; the publication job received `packages: write` and
+  completed without environment approval.
+- The rehearsal published `0.0.6` and `latest` in the isolated package
+  `ghcr.io/mrbrazzi/mb-google-ads-mcp-ghcr-rehearsal`, with manifest digest
+  `sha256:07291d8ec03259426e95e2ee0f0791b01c2ffc908f424c2e7474704eaa5dd273`.
+- [Publication-only retry, attempt 2](https://github.com/mrbrazzi/mb-google-ads-mcp/actions/runs/42722978995/attempts/2)
+  succeeded against the retained artifact and identical manifest digest. The
+  existing version was reused without rebuilding or republishing Python packages.
+- The initial integration runs exposed Docker/containerd image identity
+  differences. The fix was verified against an actual downloaded runner archive:
+  its config digest matches the build log. The script reads config identity from
+  the archive instead of assuming `docker inspect .Id` is always a config digest.
+
+Upstream organization permissions, the protected production approval path, and
+anonymous pulling after the one-time visibility change require a maintainer's
+real production release. The fork rehearsal does not establish these upstream
+conditions and does not publish to either package index.
 
 ## Suggested upstream PR description
 
@@ -94,8 +114,12 @@ public after its first publication. No GHCR environment or new registry secret
 is needed; the existing PyPI approval gates production publication. The release
 guide covers setup, anonymous pull verification, fork rehearsals, and recovery.
 
-Validation: insert actual local and fork-run results before opening the PR;
-identify upstream-only checks explicitly. Refs #118; close after the first public
+Validation: thirteen policy/registry/archive tests, local isolated image build
+and MCP smoke test, actionlint, offline zizmor, and the linked fork rehearsal
+  passed, including an identical-image publication retry. Production publishers
+  and release creation were skipped in the fork
+rehearsal. Upstream organization access, protected approval, and public pulling
+remain production acceptance checks. Refs #118; close after the first public
 production image has been verified.
 
 ## References
@@ -104,3 +128,4 @@ production image has been verified.
 - [GitHub container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry)
 - [GitHub environment approval rules](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)
 - [Docker multi-platform builds](https://docs.docker.com/build/building/multi-platform/)
+- [Moby containerd image inspection implementation](https://github.com/moby/moby/blob/master/daemon/containerd/image_inspect.go)
