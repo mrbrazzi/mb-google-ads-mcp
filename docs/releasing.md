@@ -1,7 +1,7 @@
 # Publishing releases
 
 This guide is for maintainers publishing `google-ads-mcp` to TestPyPI, PyPI,
-and GitHub Releases. The release workflow uses PyPI Trusted Publishing and
+GitHub Releases, and GHCR. The release workflow uses PyPI Trusted Publishing and
 short-lived OpenID Connect (OIDC) credentials. Do not create a `PYPI_TOKEN` or
 store a PyPI password in GitHub.
 
@@ -76,6 +76,7 @@ repository's default branch.
 
 1. Open **Actions > Release > Run workflow**.
 2. Select the revision to test and start the workflow.
+   Leave **Test GHCR in a fork without publishing to TestPyPI** unchecked.
 3. Approve the `testpypi` environment if reviewers are configured.
 4. Wait for both **Build and validate distributions** and **Publish to
    TestPyPI** to finish.
@@ -127,10 +128,12 @@ The workflow rejects a production tag unless all of these conditions hold:
 
 1. Approve the `pypi` environment deployment.
 2. Confirm that **Publish to PyPI** succeeds.
-3. Confirm that **Create GitHub Release** succeeds afterward.
+3. Confirm that **Publish container to GHCR** succeeds, then that
+   **Create GitHub Release** succeeds afterward.
 4. Verify the wheel and source distribution on PyPI.
 5. Verify that the GitHub Release contains those same files and
-   `SHA256SUMS`.
+   `SHA256SUMS`, plus the container digest reference. Verify that the version
+   image is publicly pullable and its metadata matches the tagged commit.
 6. Install the exact published version:
 
    ```shell
@@ -140,12 +143,122 @@ The workflow rejects a production tag unless all of these conditions hold:
 7. Close the release issue only after at least one new production version is
    available and installable.
 
+## Configure GHCR publication
+
+The production chain is package validation, container validation, protected
+PyPI publication, GHCR publication, and finally GitHub Release completion.
+Container publication failure blocks GitHub Release completion. PyPI and GHCR
+cannot be published atomically; use the recovery procedure below after a partial
+publication.
+
+The GHCR job uses the repository's short-lived `GITHUB_TOKEN` with job-scoped
+`packages: write`. It has no `environment` declaration and needs no GHCR-specific
+approval or registry secret. Its dependency on the successful protected `pypi`
+job makes the existing PyPI environment the production approval gate. Keep the
+existing PyPI/TestPyPI Trusted Publisher configurations.
+
+A repository/organization administrator must complete this setup:
+
+1. Confirm organization policy permits package creation and public packages in
+   `googleads`, and permits Actions to grant `packages: write` to this job.
+2. Check whether `ghcr.io/googleads/google-ads-mcp` already exists. Verify its
+   repository association and grant `googleads/google-ads-mcp` write access under
+   **Package settings > Manage Actions access** if it does not inherit access.
+3. Arrange for an administrator of the package to make it public after the first
+   successful publication: open **Package settings > Change visibility**. New
+   GHCR packages default to private, even when the source repository is public.
+4. Verify anonymous access with an empty Docker credential configuration:
+
+   ```shell
+   task_docker_config="$(mktemp -d)"
+   DOCKER_CONFIG="$task_docker_config" docker pull ghcr.io/googleads/google-ads-mcp:X.Y.Z
+   rmdir "$task_docker_config"
+   ```
+
+No new environment named `ghcr` is required. Organization package policy and
+package access remain separate requirements from environment approval.
+
+### Image and tag policy
+
+Images initially support `linux/amd64`. Version `X.Y.Z` contains the tagged
+source and OCI source, version, revision, and license labels. The Dockerfile's
+existing runtime compatibility patch remains part of the image.
+
+The container is built and smoke-tested without Google credentials or network
+access, saved to a checksummed Actions artifact, and retained for seven days.
+The publication job loads that archive and never rebuilds it. Dependencies and
+base images currently float, so a later rebuild may produce different content.
+
+Publication first pushes a `candidate-<run-id>` tag, establishing registry access
+for a new package. It then publishes `X.Y.Z`, refusing to overwrite an existing
+version with different image content. An identical version image is accepted
+on retry. Candidate tags are operational artifacts, not supported deployment
+references; retain them for recovery, and clean up old candidates according to
+the organization's package retention policy without deleting release versions.
+
+`latest` points to the highest stable `X.Y.Z` published by this workflow. Older
+maintenance releases do not move it backward. GitHub Release's **Latest** flag
+uses the same decision. These updates occur before release completion, so a
+failed finalization can temporarily leave a container available before its
+GitHub Release; rerun the failed jobs to finish the release.
+
+Production workflow runs share one concurrency group to prevent racing tag
+updates. Start one production release at a time: GitHub concurrency keeps at
+most one pending run and may replace an older pending run. PRs and manual
+rehearsals have separate concurrency groups. Do not modify registry tags outside
+this workflow. Use the published digest for fixed deployments; GHCR itself does
+not enforce tag immutability.
+
+### Rehearse GHCR in a fork
+
+The existing release workflow supports a manual rehearsal independent of both
+package indexes and production GitHub Releases:
+
+1. Push the implementation branch to your fork. The default branch must already
+   contain the dispatch-enabled `release.yml` workflow.
+2. Run **Release** against the implementation branch with
+   **Test GHCR in a fork without publishing to TestPyPI** checked. For example:
+
+   ```shell
+   gh workflow run release.yml --repo OWNER/FORK --ref feature/issue-118-release-docker-image-to-ghcr -f ghcr-rehearsal=true
+   ```
+
+3. Confirm package/container builds succeed, **Rehearse GHCR publication in a
+   fork** succeeds, and TestPyPI, production PyPI, production GHCR, and GitHub
+   Release jobs are skipped. No environment approval should be requested.
+4. Inspect `ghcr.io/owner/fork-ghcr-rehearsal:X.Y.Z`, its `latest` tag and OCI
+   labels. `X.Y.Z` is the declared source version, not the TestPyPI development
+   version generated in the separate package-build workspace.
+5. Make the rehearsal package public if desired and verify anonymous pulling.
+   Rerun only the rehearsal publication job to verify identical-image recovery.
+
+The rehearsal input cannot publish in `googleads/google-ads-mcp`; its publication
+job is restricted to forks and always uses the separate `-ghcr-rehearsal` package.
+Rebuilding the same version in a new run can correctly fail the immutable-tag
+check. Use a new source version for another build, or rerun only the publication
+job against the original retained archive. A successful fork rehearsal verifies
+that fork's permissions, not the upstream organization's package policy.
+
+Future ARM64 support can use QEMU or hosted native ARM64 runners without local
+ARM64 hardware. It requires platform tests and a multi-platform publication
+design; a single Docker image archive cannot represent a manifest list.
+
 ## Failure recovery
 
 - **Failure before PyPI publication:** correct the source through a pull
   request, choose a new version, and create a new tag. Do not move a pushed
   release tag.
-- **PyPI succeeded but GitHub Release failed:** use **Re-run failed jobs** so
+- **PyPI succeeded but GHCR failed:** correct permissions or transient registry
+  failures and use **Re-run failed jobs** in the original run. The checksummed
+  image artifact must still exist. Do not rerun successful package/container
+  builds or PyPI publication: package validation rejects versions already on PyPI.
+  An already pushed identical version is reused; different image content fails.
+- **Image artifact expired:** do not rebuild and overwrite that version. Publish
+  a new version/tag, or arrange a separately reviewed recovery using the existing
+  registry image when its identity can be established.
+- **GHCR push succeeded but anonymous pulling fails:** check package visibility
+  and repository/Actions access. A green push job does not prove public access.
+- **PyPI and GHCR succeeded but GitHub Release failed:** use **Re-run failed jobs** so
   the release job resumes its draft or verifies the already published assets.
   Do not rerun the successful PyPI job.
 - **Defective published version:** yank it on PyPI when appropriate and publish

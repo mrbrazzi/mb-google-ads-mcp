@@ -96,6 +96,25 @@ instead of following the latest repository state:
 pipx run --spec "google-ads-mcp==X.Y.Z" google-ads-mcp
 ```
 
+### Container images
+
+Production releases also publish a `linux/amd64` image to GHCR:
+
+```shell
+docker pull ghcr.io/googleads/google-ads-mcp:X.Y.Z
+```
+
+Replace `X.Y.Z` with the desired release version. The `latest` tag follows the
+highest stable release version; publishing an older maintenance release does
+not move it backward. For a fixed image, use the digest reference in that
+version's GitHub Release notes instead of a mutable tag.
+
+The image runs `google-ads-mcp`. Continue with the credential and MCP client
+configuration below, supplying credentials at runtime. Without OAuth client
+settings the server uses stdio; publishing port 8080 alone does not enable HTTP.
+For stdio, run Docker with `-i` and without `-t`. Maintainers should follow the
+[release guide](docs/releasing.md) for initial package visibility and access.
+
 ### Enable APIs in your project
 
 [Follow the instructions](https://support.google.com/googleapi/answer/6158841)

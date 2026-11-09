@@ -1,0 +1,10 @@
+# Only tracked application and packaging inputs belong in the image.
+**
+!ads_mcp/
+!ads_mcp/**
+!pyproject.toml
+!MANIFEST.in
+!README.md
+!LICENSE
+ads_mcp/**/__pycache__/
+ads_mcp/**/*.pyc
