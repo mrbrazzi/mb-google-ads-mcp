@@ -3,12 +3,20 @@
 import copy
 import hashlib
 import json
+import pathlib
+import tarfile
+import tempfile
 import unittest
 import urllib.error
 from io import BytesIO
 from unittest import mock
 
-from scripts.publish_container import Registry, publish, version_tuple
+from scripts.publish_container import (
+    Registry,
+    archive_config_digest,
+    publish,
+    version_tuple,
+)
 
 
 def manifest(image_id):
@@ -110,6 +118,35 @@ class PublicationTest(unittest.TestCase):
         for value in ("v1.2.3", "1.2.3rc1", "1.2", "$(command)"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 version_tuple(value)
+
+
+class ArchiveIdentityTest(unittest.TestCase):
+    def test_classic_and_containerd_archives_use_config_identity(self):
+        config = b'{"architecture":"amd64","rootfs":{"diff_ids":[]}}'
+        digest = hashlib.sha256(config).hexdigest()
+        for name in (f"{digest}.json", f"blobs/sha256/{digest}"):
+            with (
+                self.subTest(name=name),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = pathlib.Path(directory) / "image.tar"
+                records = [
+                    {
+                        "Config": name,
+                        "RepoTags": ["release-container:validated"],
+                    }
+                ]
+                with tarfile.open(path, "w") as archive:
+                    for filename, data in (
+                        (name, config),
+                        ("manifest.json", json.dumps(records).encode()),
+                    ):
+                        info = tarfile.TarInfo(filename)
+                        info.size = len(data)
+                        archive.addfile(info, BytesIO(data))
+                self.assertEqual(
+                    archive_config_digest(path), f"sha256:{digest}"
+                )
 
 
 class RegistryErrorTest(unittest.TestCase):

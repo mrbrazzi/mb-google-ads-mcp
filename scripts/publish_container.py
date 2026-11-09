@@ -11,6 +11,7 @@ import json
 import os
 import re
 import subprocess
+import tarfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,6 +28,24 @@ def version_tuple(version):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
         raise ValueError(f"Invalid stable version: {version!r}")
     return tuple(int(part) for part in version.split("."))
+
+
+def archive_config_digest(path):
+    """Read the config identity independently of Docker's active image store.
+
+    With containerd, docker inspect's Id can be a manifest/index digest rather
+    than the config digest returned by the classic image store.
+    """
+    with tarfile.open(path) as archive:
+        images = json.load(archive.extractfile("manifest.json"))
+        if len(images) != 1 or images[0]["RepoTags"] != [
+            "release-container:validated"
+        ]:
+            raise RuntimeError(
+                "Expected one tagged release image in the archive"
+            )
+        config = archive.extractfile(images[0]["Config"]).read()
+    return "sha256:" + hashlib.sha256(config).hexdigest()
 
 
 class Registry:
@@ -112,7 +131,9 @@ def publish(registry, version, candidate, expected_id, revision):
     """Keep published versions immutable and latest monotonically increasing."""
     version_tuple(version)
     manifest = registry.manifest(candidate)
-    if manifest is None or manifest[1]["config"]["digest"] != expected_id:
+    if manifest is None:
+        raise RuntimeError("Candidate manifest is missing after push")
+    if manifest[1]["config"]["digest"] != expected_id:
         raise RuntimeError("Candidate does not match the tested image")
     labels = registry.labels(manifest)
     if (
@@ -156,10 +177,7 @@ def main():
     username = os.environ["GITHUB_ACTOR"]
     password = os.environ["GHCR_TOKEN"]
     local = "release-container:validated"
-    expected_id = subprocess.check_output(
-        ["docker", "image", "inspect", "--format", "{{.Id}}", local],
-        text=True,
-    ).strip()
+    expected_id = archive_config_digest("container-artifact/image.tar")
     subprocess.run(
         ["docker", "login", "ghcr.io", "-u", username, "--password-stdin"],
         input=password,
