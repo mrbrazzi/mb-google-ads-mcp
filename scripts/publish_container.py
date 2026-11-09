@@ -17,6 +17,10 @@ import urllib.request
 
 MEDIA_TYPE = "application/vnd.docker.distribution.manifest.v2+json"
 OCI_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+INDEX_MEDIA_TYPES = (
+    "application/vnd.oci.image.index.v1+json",
+    "application/vnd.docker.distribution.manifest.list.v2+json",
+)
 
 
 def version_tuple(version):
@@ -45,7 +49,9 @@ class Registry:
     def request(self, resource, *, data=None, media_type=None):
         headers = {
             "Authorization": f"Bearer {self.token}",
-            "Accept": f"{MEDIA_TYPE}, {OCI_MEDIA_TYPE}",
+            "Accept": ", ".join(
+                (MEDIA_TYPE, OCI_MEDIA_TYPE, *INDEX_MEDIA_TYPES)
+            ),
         }
         if media_type:
             headers["Content-Type"] = media_type
@@ -70,7 +76,25 @@ class Registry:
 
     def manifest(self, tag):
         raw = self.request(f"manifests/{tag}")
-        return None if raw is None else (raw, json.loads(raw))
+        if raw is None:
+            return None
+        parsed = json.loads(raw)
+        if parsed["mediaType"] in INDEX_MEDIA_TYPES:
+            matches = [
+                item
+                for item in parsed["manifests"]
+                if item.get("platform", {}).get("os") == "linux"
+                and item.get("platform", {}).get("architecture") == "amd64"
+            ]
+            if len(matches) != 1:
+                raise RuntimeError("Expected exactly one linux/amd64 manifest")
+            raw = self.request(f"manifests/{matches[0]['digest']}")
+            if raw is None:
+                raise RuntimeError("Image index refers to a missing manifest")
+            parsed = json.loads(raw)
+        if parsed["mediaType"] not in (MEDIA_TYPE, OCI_MEDIA_TYPE):
+            raise RuntimeError("Expected a single-platform image manifest")
+        return raw, parsed
 
     def tag(self, tag, manifest):
         raw, parsed = manifest

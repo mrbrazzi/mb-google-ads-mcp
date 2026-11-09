@@ -113,6 +113,51 @@ class PublicationTest(unittest.TestCase):
 
 
 class RegistryErrorTest(unittest.TestCase):
+    def test_containerd_index_selects_amd64_and_ignores_attestations(self):
+        registry = Registry.__new__(Registry)
+        index = {
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "digest": "sha256:platform-image",
+                    "platform": {"os": "linux", "architecture": "amd64"},
+                },
+                {
+                    "digest": "sha256:attestation",
+                    "platform": {"os": "unknown", "architecture": "unknown"},
+                },
+            ],
+        }
+        expected = manifest("sha256:tested")
+        with mock.patch.object(
+            registry,
+            "request",
+            side_effect=[json.dumps(index).encode(), expected[0]],
+        ) as request:
+            self.assertEqual(registry.manifest("candidate-123"), expected)
+        self.assertEqual(
+            request.call_args.args, ("manifests/sha256:platform-image",)
+        )
+
+    def test_wrong_platform_index_is_rejected(self):
+        registry = Registry.__new__(Registry)
+        index = {
+            "mediaType": "application/vnd.oci.image.index.v1+json",
+            "manifests": [
+                {
+                    "digest": "sha256:arm64",
+                    "platform": {"os": "linux", "architecture": "arm64"},
+                }
+            ],
+        }
+        with mock.patch.object(
+            registry, "request", return_value=json.dumps(index).encode()
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "exactly one linux/amd64"
+            ):
+                registry.manifest("candidate-123")
+
     def request_with_error(self, status, code):
         registry = Registry.__new__(Registry)
         registry.path = "owner/image"

@@ -289,7 +289,7 @@ jobs:
       - name: Build the release image
         run: |
           version="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
-          docker build --platform linux/amd64 \
+          docker build --platform linux/amd64 --provenance=false --sbom=false \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             --label "org.opencontainers.image.version=$version" \
